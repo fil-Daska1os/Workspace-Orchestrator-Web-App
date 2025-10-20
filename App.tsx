@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import AuthScreen from './components/AuthScreen';
+import ClientIdInputScreen from './components/ClientIdInputScreen';
 import Header from './components/Header';
 import ChatWindow from './components/ChatWindow';
 import ChatInput from './components/ChatInput';
@@ -9,14 +10,6 @@ import ConfirmationModal from './components/ConfirmationModal';
 import { ChatMessage, MessageAuthor, ConfirmationPayload, WorkspaceItem } from './types';
 import { orchestrateWorkspace } from './services/geminiService';
 import { getFeedData, sendEmail, createCalendarEvent, createGoogleDoc } from './services/googleApiService';
-
-// ==================================================================
-// IMPORTANT: REPLACE WITH YOUR GOOGLE CLOUD CLIENT ID
-// You can get one from the Google Cloud Console:
-// https://console.cloud.google.com/apis/credentials
-const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID_HERE.apps.googleusercontent.com";
-// ==================================================================
-
 
 // Fix: Add types for the Web Speech API to resolve TypeScript errors.
 interface SpeechRecognition extends EventTarget {
@@ -66,13 +59,15 @@ if (SpeechRecognitionAPI) {
 }
 
 const App: React.FC = () => {
+  const [clientId, setClientId] = useState<string | null>(() => localStorage.getItem('googleClientId'));
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [tokenClient, setTokenClient] = useState<any>(null);
+  const [authError, setAuthError] = useState<boolean>(false);
 
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
     {
       author: MessageAuthor.ASSISTANT,
-      content: "Hello! Please sign in to connect your Google Workspace.",
+      content: "Hello! Please provide your Google Client ID to connect your Workspace.",
     }
   ]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -87,30 +82,43 @@ const App: React.FC = () => {
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
 
   useEffect(() => {
-    if (GOOGLE_CLIENT_ID.startsWith('YOUR_GOOGLE_CLIENT_ID_HERE')) {
-        setChatHistory(prev => [
-            ...prev, 
-            { author: MessageAuthor.SYSTEM, content: "Configuration needed: Please replace the placeholder Google Client ID in App.tsx for authentication to work." }
-        ]);
-        return;
+    if (!clientId) {
+      return;
+    }
+    
+    if (chatHistory[0].content.includes('Client ID')) {
+      setChatHistory([{ author: MessageAuthor.ASSISTANT, content: "Thank you! Now please sign in to connect your Google Workspace." }]);
     }
 
     if ((window as any).google) {
-      const client = (window as any).google.accounts.oauth2.initTokenClient({
-        client_id: GOOGLE_CLIENT_ID,
-        scope: 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/drive',
-        callback: (tokenResponse: any) => {
-          if (tokenResponse && tokenResponse.access_token) {
-            setAccessToken(tokenResponse.access_token);
-            setChatHistory([{ author: MessageAuthor.ASSISTANT, content: "Successfully connected! How can I help you with your Google Workspace today?" }]);
-          } else {
-            setChatHistory(prev => [...prev, { author: MessageAuthor.SYSTEM, content: "Authentication failed. Please try again." }]);
+      try {
+        const client = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/drive',
+          callback: (tokenResponse: any) => {
+            if (tokenResponse && tokenResponse.access_token) {
+              setAuthError(false);
+              setAccessToken(tokenResponse.access_token);
+              setChatHistory([{ author: MessageAuthor.ASSISTANT, content: "Successfully connected! How can I help you with your Google Workspace today?" }]);
+            } else {
+              setAuthError(true);
+              setChatHistory(prev => [...prev, { author: MessageAuthor.SYSTEM, content: "Authentication failed. Please try again." }]);
+            }
+          },
+          error_callback: (error: any) => {
+              console.error("Google Auth Error:", error);
+              setAuthError(true);
+              setChatHistory(prev => [...prev, { author: MessageAuthor.SYSTEM, content: "Authentication failed. Please check your Client ID configuration." }]);
           }
-        },
-      });
-      setTokenClient(client);
+        });
+        setTokenClient(client);
+      } catch (err) {
+        console.error("Failed to initialize Google Auth:", err);
+        setAuthError(true);
+        setChatHistory(prev => [...prev, { author: MessageAuthor.SYSTEM, content: "Failed to initialize Google Sign-In. The Client ID you provided might be invalid." }]);
+      }
     }
-  }, []);
+  }, [clientId]);
 
   useEffect(() => {
     if (accessToken) {
@@ -142,8 +150,22 @@ const App: React.FC = () => {
     return () => { if (recognition) recognition.stop(); };
   }, []);
 
+  const handleSetClientId = (id: string) => {
+    localStorage.setItem('googleClientId', id);
+    setClientId(id);
+  };
+
+  const handleResetClientId = () => {
+    localStorage.removeItem('googleClientId');
+    setClientId(null);
+    setAccessToken(null);
+    setAuthError(false);
+    setChatHistory([{ author: MessageAuthor.ASSISTANT, content: "Hello! Please provide your Google Client ID to connect your Workspace." }]);
+  };
+
   const handleAuth = () => {
     if (tokenClient) {
+      setAuthError(false);
       tokenClient.requestAccessToken();
     }
   };
@@ -249,10 +271,14 @@ const App: React.FC = () => {
       setChatHistory([{ author: MessageAuthor.ASSISTANT, content: "You have been logged out. Please sign in to connect your Google Workspace." }]);
   };
 
+  if (!clientId) {
+    return <ClientIdInputScreen onSetClientId={handleSetClientId} />;
+  }
+
   const isAuthenticated = !!accessToken;
   
   if (!isAuthenticated) {
-    return <AuthScreen onAuth={handleAuth} />;
+    return <AuthScreen onAuth={handleAuth} authError={authError} onResetClientId={handleResetClientId} />;
   }
 
   return (
