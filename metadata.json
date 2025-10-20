@@ -1,0 +1,7 @@
+{
+  "name": "Google Workspace Orchestrator",
+  "description": "A unified, AI-driven interface that consolidates a user's entire Google Workspace into a single, intuitive chat application, managed via natural language commands.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
